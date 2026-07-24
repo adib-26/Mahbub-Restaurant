@@ -37,7 +37,7 @@ The API health check is available at `http://localhost:4000/health`. Registratio
 ```bash
 cp .env.example .env
 docker compose up -d --build
-docker compose run --rm api npm run db:migrate
+docker compose run --rm api npm run db:migrate:prod
 ```
 
 Then open `http://localhost:5173`. Stop the stack with `docker compose down`. Add `-v` only when you intentionally want to remove the PostgreSQL data volume.
