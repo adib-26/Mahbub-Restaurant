@@ -1,0 +1,3 @@
+import nodemailer from 'nodemailer';
+const transport = nodemailer.createTransport({ host: process.env.SMTP_HOST, port: Number(process.env.SMTP_PORT || 1025), secure: false, auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD } : undefined });
+export async function sendLink(to: string, subject: string, path: string) { const url = `${process.env.APP_URL || 'http://localhost:5173'}${path}`; await transport.sendMail({ from: process.env.SMTP_FROM || 'no-reply@mahbub-food.local', to, subject, text: `Use this link: ${url}`, html: `<p>Use this link to continue:</p><p><a href="${url}">${url}</a></p>` }); }

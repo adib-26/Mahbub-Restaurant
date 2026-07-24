@@ -1,0 +1,29 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: food_delivery
+      POSTGRES_USER: food_delivery
+      POSTGRES_PASSWORD: food_delivery
+    ports: ["5432:5432"]
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U food_delivery -d food_delivery"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  mailpit:
+    image: axllent/mailpit:v1.20
+    ports: ["1025:1025", "8025:8025"]
+  api:
+    build: ./apps/api
+    env_file: .env
+    ports: ["4000:4000"]
+    depends_on:
+      db: { condition: service_healthy }
+  web:
+    build: ./apps/web
+    ports: ["5173:80"]
+    depends_on: [api]
+volumes:
+  postgres_data:

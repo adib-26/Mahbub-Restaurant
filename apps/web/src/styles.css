@@ -1,0 +1,2 @@
+@tailwind base; @tailwind components; @tailwind utilities;
+body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}.field{display:block;width:100%;box-sizing:border-box;border:1px solid #dce9df;border-radius:.75rem;padding:.8rem;margin-bottom:.8rem;outline:none}.field:focus{border-color:#1e6b4d;box-shadow:0 0 0 3px #dce9df}
