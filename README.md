@@ -18,6 +18,8 @@ Customer-management foundation for a multi-vendor food-delivery platform.
 
 ## Run locally
 
+The project requires Node.js 20+ and Docker Desktop. Run these commands from the repository root:
+
 ```bash
 cp .env.example .env
 docker compose up -d db mailpit
@@ -27,6 +29,18 @@ npm run dev
 ```
 
 API: `http://localhost:4000`, web: `http://localhost:5173`, Mailpit: `http://localhost:8025`.
+
+The API health check is available at `http://localhost:4000/health`. Registration and password-reset emails are captured by Mailpit at `http://localhost:8025` during development.
+
+## Run with Docker
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+docker compose run --rm api npm run db:migrate
+```
+
+Then open `http://localhost:5173`. Stop the stack with `docker compose down`. Add `-v` only when you intentionally want to remove the PostgreSQL data volume.
 
 ## API surface
 
