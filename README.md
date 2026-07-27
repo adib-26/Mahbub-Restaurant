@@ -6,7 +6,7 @@ Customer-management foundation for a multi-vendor food-delivery platform.
 
 - Customer registration/login with bcrypt password hashing
 - JWT access tokens (15 minutes) and rotating refresh tokens (30 days)
-- One-time email verification and forgot/reset-password links
+- One-time email verification (including resend) and forgot/reset-password links
 - Multiple delivery addresses with a single default address
 - Restaurant favorites/wishlist
 - Order history
@@ -44,7 +44,9 @@ Then open `http://localhost:5173`. Stop the stack with `docker compose down`. Ad
 
 ## API surface
 
-Auth: `POST /api/auth/register`, `/login`, `/verify-email`, `/forgot-password`, `/reset-password`, `/refresh`.
+Auth: `POST /api/auth/register`, `/login`, `/resend-verification`, `/verify-email`, `/forgot-password`, `/reset-password`, `/refresh`.
+
+The customer web app includes the verification confirmation screen, a resend option for unverified signed-in customers, a **Forgot password?** entry point, and a reset-password screen. Email links use `/verify-email?token=…` and `/reset-password?token=…`; the production web image is configured to serve these client-side routes when a customer opens a link directly from email.
 
 Customer: `GET /api/me`, `/addresses`, `/orders`, `/favorites`, `/payment-methods`, `/loyalty`; address/favorite/payment mutations and `POST /api/reviews` are also protected by the bearer access token.
 
