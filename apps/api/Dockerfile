@@ -5,6 +5,7 @@ RUN npm install
 COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
+RUN mkdir -p /app/dist/db && cp /app/src/db/schema.sql /app/dist/db/schema.sql
 FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
