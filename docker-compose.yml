@@ -18,6 +18,8 @@ services:
   api:
     build: ./apps/api
     env_file: .env
+    environment:
+      DATABASE_URL: postgresql://food_delivery:food_delivery@db:5432/food_delivery
     ports: ["4000:4000"]
     depends_on:
       db: { condition: service_healthy }
