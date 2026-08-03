@@ -19,10 +19,13 @@ services:
     build: ./apps/api
     env_file: .env
     environment:
+      # Inside the compose network the services are reachable by name, not localhost.
+      SMTP_HOST: mailpit
       DATABASE_URL: postgresql://food_delivery:food_delivery@db:5432/food_delivery
     ports: ["4000:4000"]
     depends_on:
       db: { condition: service_healthy }
+      mailpit: { condition: service_started }
   web:
     build: 
       context: ./apps/web

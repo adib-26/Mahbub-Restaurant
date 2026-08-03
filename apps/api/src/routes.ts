@@ -339,8 +339,47 @@ router.post('/addresses', auth, async (req, res, next) => {
 
 router.delete('/addresses/:id', auth, async (req, res, next) => {
   try {
-    await pool.query('DELETE FROM addresses WHERE id=$1 AND user_id=$2', [req.params.id, req.userId]);
+    const id = z.string().uuid().safeParse(req.params.id);
+    if (!id.success) return res.status(400).json({ error: 'Invalid address id' });
+    await pool.query('DELETE FROM addresses WHERE id=$1 AND user_id=$2', [id.data, req.userId]);
     return res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch('/addresses/:id/default', auth, async (req, res, next) => {
+  try {
+    const id = z.string().uuid().safeParse(req.params.id);
+    if (!id.success) return res.status(400).json({ error: 'Invalid address id' });
+    const address = await tx(async (client) => {
+      const owned = await client.query('SELECT 1 FROM addresses WHERE id=$1 AND user_id=$2', [
+        id.data,
+        req.userId,
+      ]);
+      if (!owned.rowCount) return undefined;
+      await client.query('UPDATE addresses SET is_default=false WHERE user_id=$1', [req.userId]);
+      return (
+        await client.query('UPDATE addresses SET is_default=true WHERE id=$1 RETURNING *', [id.data])
+      ).rows[0];
+    });
+    if (!address) return res.status(404).json({ error: 'Address not found' });
+    return res.json({ address });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/restaurants', auth, async (req, res, next) => {
+  try {
+    const restaurants = await pool.query(
+      `SELECT r.id, r.name, r.cuisine, r.city, (f.user_id IS NOT NULL) AS "isFavorite"
+       FROM restaurants r
+       LEFT JOIN favorites f ON f.restaurant_id = r.id AND f.user_id = $1
+       ORDER BY r.name`,
+      [req.userId],
+    );
+    return res.json({ restaurants: restaurants.rows });
   } catch (error) {
     next(error);
   }
@@ -349,7 +388,10 @@ router.delete('/addresses/:id', auth, async (req, res, next) => {
 router.get('/favorites', auth, async (req, res, next) => {
   try {
     const favorites = await pool.query(
-      'SELECT restaurant_id AS "restaurantId", created_at AS "createdAt" FROM favorites WHERE user_id=$1 ORDER BY created_at DESC',
+      `SELECT f.restaurant_id AS "restaurantId", r.name, r.cuisine, r.city, f.created_at AS "createdAt"
+       FROM favorites f
+       LEFT JOIN restaurants r ON r.id = f.restaurant_id
+       WHERE f.user_id=$1 ORDER BY f.created_at DESC`,
       [req.userId],
     );
     return res.json({ favorites: favorites.rows });
@@ -360,9 +402,11 @@ router.get('/favorites', auth, async (req, res, next) => {
 
 router.post('/favorites/:restaurantId', auth, async (req, res, next) => {
   try {
+    const restaurantId = z.string().uuid().safeParse(req.params.restaurantId);
+    if (!restaurantId.success) return res.status(400).json({ error: 'Invalid restaurant id' });
     await pool.query('INSERT INTO favorites(user_id, restaurant_id) VALUES($1, $2) ON CONFLICT DO NOTHING', [
       req.userId,
-      req.params.restaurantId,
+      restaurantId.data,
     ]);
     return res.status(201).json({ favorite: true });
   } catch (error) {
@@ -372,9 +416,11 @@ router.post('/favorites/:restaurantId', auth, async (req, res, next) => {
 
 router.delete('/favorites/:restaurantId', auth, async (req, res, next) => {
   try {
+    const restaurantId = z.string().uuid().safeParse(req.params.restaurantId);
+    if (!restaurantId.success) return res.status(400).json({ error: 'Invalid restaurant id' });
     await pool.query('DELETE FROM favorites WHERE user_id=$1 AND restaurant_id=$2', [
       req.userId,
-      req.params.restaurantId,
+      restaurantId.data,
     ]);
     return res.status(204).end();
   } catch (error) {
@@ -385,10 +431,56 @@ router.delete('/favorites/:restaurantId', auth, async (req, res, next) => {
 router.get('/orders', auth, async (req, res, next) => {
   try {
     const orders = await pool.query(
-      'SELECT id, status, total_cents AS "totalCents", created_at AS "createdAt" FROM orders WHERE user_id=$1 ORDER BY created_at DESC',
+      `SELECT o.id, o.status, o.total_cents AS "totalCents", o.created_at AS "createdAt",
+              o.restaurant_id AS "restaurantId", r.name AS "restaurantName",
+              EXISTS(SELECT 1 FROM reviews v WHERE v.order_id = o.id AND v.user_id = o.user_id) AS "reviewed"
+       FROM orders o
+       LEFT JOIN restaurants r ON r.id = o.restaurant_id
+       WHERE o.user_id=$1 ORDER BY o.created_at DESC`,
       [req.userId],
     );
     return res.json({ orders: orders.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Demo checkout: creates a delivered order and awards loyalty points (1 point per RM1)
+// until the real ordering pipeline exists.
+router.post('/orders', auth, async (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        restaurantId: z.string().uuid(),
+        totalCents: z.number().int().min(100).max(1_000_000),
+      })
+      .parse(req.body);
+    const restaurant = await pool.query('SELECT id FROM restaurants WHERE id=$1', [body.restaurantId]);
+    if (!restaurant.rowCount) return res.status(404).json({ error: 'Restaurant not found' });
+
+    const order = await tx(async (client) => {
+      const created = (
+        await client.query(
+          `INSERT INTO orders(user_id, restaurant_id, status, total_cents)
+           VALUES($1, $2, 'DELIVERED', $3)
+           RETURNING id, status, total_cents AS "totalCents", restaurant_id AS "restaurantId", created_at AS "createdAt"`,
+          [req.userId, body.restaurantId, body.totalCents],
+        )
+      ).rows[0];
+      const points = Math.floor(body.totalCents / 100);
+      if (points > 0) {
+        await client.query(
+          'INSERT INTO loyalty_ledger(user_id, points, reason, order_id) VALUES($1, $2, $3, $4)',
+          [req.userId, points, 'Order reward', created.id],
+        );
+        await client.query('UPDATE users SET loyalty_points = loyalty_points + $1, updated_at=now() WHERE id=$2', [
+          points,
+          req.userId,
+        ]);
+      }
+      return created;
+    });
+    return res.status(201).json({ order });
   } catch (error) {
     next(error);
   }
@@ -456,26 +548,64 @@ router.delete('/payment-methods/:id', auth, async (req, res, next) => {
   }
 });
 
+router.patch('/payment-methods/:id/default', auth, async (req, res, next) => {
+  try {
+    const paymentMethod = await tx(async (client) => {
+      await client.query('UPDATE payment_methods SET is_default=false WHERE user_id=$1', [req.userId]);
+      return (
+        await client.query(
+          `UPDATE payment_methods SET is_default=true WHERE id=$1 AND user_id=$2
+           RETURNING id, provider, brand, last4, exp_month AS "expMonth", exp_year AS "expYear", is_default AS "isDefault"`,
+          [req.params.id, req.userId],
+        )
+      ).rows[0];
+    });
+    if (!paymentMethod) return res.status(404).json({ error: 'Payment method not found' });
+    return res.json({ paymentMethod });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/reviews', auth, async (req, res, next) => {
+  try {
+    const reviews = await pool.query(
+      `SELECT v.id, v.rating, v.comment, v.created_at AS "createdAt",
+              v.restaurant_id AS "restaurantId", r.name AS "restaurantName", v.order_id AS "orderId"
+       FROM reviews v
+       LEFT JOIN restaurants r ON r.id = v.restaurant_id
+       WHERE v.user_id=$1 ORDER BY v.created_at DESC`,
+      [req.userId],
+    );
+    return res.json({ reviews: reviews.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/reviews', auth, async (req, res, next) => {
   try {
     const body = z
       .object({
-        restaurantId: z.string().uuid(),
         orderId: z.string().uuid(),
+        restaurantId: z.string().uuid().optional(),
         rating: z.number().int().min(1).max(5),
         comment: z.string().max(1000).optional(),
       })
       .parse(req.body);
     const eligible = await pool.query(
-      "SELECT 1 FROM orders WHERE id=$1 AND user_id=$2 AND status='DELIVERED'",
+      "SELECT restaurant_id FROM orders WHERE id=$1 AND user_id=$2 AND status='DELIVERED'",
       [body.orderId, req.userId],
     );
     if (!eligible.rowCount) return res.status(403).json({ error: 'Only delivered orders can be reviewed' });
 
+    const restaurantId = eligible.rows[0].restaurant_id || body.restaurantId;
+    if (!restaurantId) return res.status(400).json({ error: 'This order has no restaurant to review' });
+
     const review = (
       await pool.query(
         'INSERT INTO reviews(user_id, restaurant_id, order_id, rating, comment) VALUES($1, $2, $3, $4, $5) RETURNING *',
-        [req.userId, body.restaurantId, body.orderId, body.rating, body.comment || null],
+        [req.userId, restaurantId, body.orderId, body.rating, body.comment || null],
       )
     ).rows[0];
     return res.status(201).json({ review });

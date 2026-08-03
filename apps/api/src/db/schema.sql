@@ -1,5 +1,6 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto; CREATE EXTENSION IF NOT EXISTS citext;
-CREATE TYPE user_role AS ENUM ('CUSTOMER','RESTAURANT','RIDER','ADMIN'); CREATE TYPE order_status AS ENUM ('PENDING','CONFIRMED','PREPARING','READY','PICKED_UP','DELIVERED','CANCELLED');
+DO $$ BEGIN CREATE TYPE user_role AS ENUM ('CUSTOMER','RESTAURANT','RIDER','ADMIN'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE order_status AS ENUM ('PENDING','CONFIRMED','PREPARING','READY','PICKED_UP','DELIVERED','CANCELLED'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 CREATE TABLE IF NOT EXISTS users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), email CITEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, full_name TEXT NOT NULL, phone TEXT, role user_role NOT NULL DEFAULT 'CUSTOMER', email_verified_at TIMESTAMPTZ, loyalty_points INT NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS auth_tokens (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, token_hash TEXT NOT NULL, type TEXT NOT NULL CHECK(type IN ('VERIFY_EMAIL','RESET_PASSWORD','REFRESH')), expires_at TIMESTAMPTZ NOT NULL, consumed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
 CREATE INDEX IF NOT EXISTS auth_tokens_lookup_idx ON auth_tokens(token_hash, type);
@@ -9,3 +10,14 @@ CREATE TABLE IF NOT EXISTS orders (id UUID PRIMARY KEY DEFAULT gen_random_uuid()
 CREATE TABLE IF NOT EXISTS payment_methods (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, provider TEXT NOT NULL, provider_payment_method_id TEXT NOT NULL, brand TEXT, last4 CHAR(4), exp_month SMALLINT, exp_year SMALLINT, is_default BOOLEAN NOT NULL DEFAULT false, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(provider, provider_payment_method_id)); CREATE UNIQUE INDEX IF NOT EXISTS one_default_payment_method ON payment_methods(user_id) WHERE is_default;
 CREATE TABLE IF NOT EXISTS reviews (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL REFERENCES users(id), restaurant_id UUID NOT NULL, order_id UUID NOT NULL REFERENCES orders(id), rating SMALLINT NOT NULL CHECK(rating BETWEEN 1 AND 5), comment TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(user_id, order_id, restaurant_id));
 CREATE TABLE IF NOT EXISTS loyalty_ledger (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, points INT NOT NULL, reason TEXT NOT NULL, order_id UUID REFERENCES orders(id), created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS restaurants (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL, cuisine TEXT NOT NULL, city TEXT NOT NULL DEFAULT 'Kuala Lumpur', created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS restaurant_id UUID REFERENCES restaurants(id);
+DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='orders_restaurant_id_fkey') THEN ALTER TABLE orders ADD CONSTRAINT orders_restaurant_id_fkey FOREIGN KEY (restaurant_id) REFERENCES restaurants(id); END IF; END $$;
+INSERT INTO restaurants(id, name, cuisine, city) VALUES
+  ('11111111-1111-4111-8111-111111111111','Mahbub Bistro','Malaysian','Kuala Lumpur'),
+  ('22222222-2222-4222-8222-222222222222','Nasi Kandar Corner','Mamak','Penang'),
+  ('33333333-3333-4333-8333-333333333333','Dragon Wok','Chinese','Kuala Lumpur'),
+  ('44444444-4444-4444-8444-444444444444','Spice Route','Indian','Petaling Jaya'),
+  ('55555555-5555-4555-8555-555555555555','Sakura Sushi House','Japanese','Kuala Lumpur'),
+  ('66666666-6666-4666-8666-666666666666','Bella Napoli','Italian','Kuala Lumpur')
+ON CONFLICT (id) DO NOTHING;

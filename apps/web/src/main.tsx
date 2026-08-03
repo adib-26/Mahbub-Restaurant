@@ -1,5 +1,13 @@
 import { StrictMode, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
+import {
+  AddressesPanel,
+  FavoritesPanel,
+  LoyaltyPanel,
+  OrdersPanel,
+  PaymentsPanel,
+  ReviewsPanel,
+} from './account';
 import { api } from './api';
 import './styles.css';
 
@@ -91,6 +99,11 @@ function App() {
   return (
     <CustomerDashboard
       user={user}
+      onUserRefresh={() => {
+        api<{ user: ApiUser }>('/me')
+          .then((response) => setUser(toCustomerUser(response.user)))
+          .catch(() => undefined);
+      }}
       onSignOut={() => {
         localStorage.removeItem('accessToken');
         setUser(null);
@@ -514,10 +527,17 @@ function ResetPassword({ onContinue }: { onContinue: () => void }) {
   );
 }
 
-function CustomerDashboard({ user, onSignOut }: { user: CustomerUser; onSignOut: () => void }) {
+function CustomerDashboard({
+  user,
+  onUserRefresh,
+  onSignOut,
+}: {
+  user: CustomerUser;
+  onUserRefresh: () => void;
+  onSignOut: () => void;
+}) {
   const [tab, setTab] = useState('overview');
-  const [error, setError] = useState('');
-  const tabs = ['overview', 'addresses', 'orders', 'favorites', 'payments', 'loyalty'];
+  const tabs = ['overview', 'addresses', 'orders', 'favorites', 'payments', 'reviews', 'loyalty'];
 
   return (
     <div className="min-h-screen bg-cream text-ink">
@@ -539,10 +559,7 @@ function CustomerDashboard({ user, onSignOut }: { user: CustomerUser; onSignOut:
               <button
                 key={item}
                 type="button"
-                onClick={() => {
-                  setTab(item);
-                  setError('');
-                }}
+                onClick={() => setTab(item)}
                 className={`mb-1 block rounded-xl px-4 py-3 text-left capitalize transition max-md:w-auto md:w-full ${
                   tab === item ? 'bg-brand font-semibold text-white' : 'hover:bg-sage'
                 }`}
@@ -556,8 +573,13 @@ function CustomerDashboard({ user, onSignOut }: { user: CustomerUser; onSignOut:
           <p className="text-sm text-slate-500">Welcome back</p>
           <h1 className="mb-5 text-4xl font-black">{user.fullName}</h1>
           {!user.emailVerified && <VerificationBanner email={user.email} />}
-          {error && <p className="mb-4 rounded-lg bg-red-50 p-3 text-red-700">{error}</p>}
-          {tab === 'overview' ? <Overview user={user} /> : <Panel tab={tab} setError={setError} />}
+          {tab === 'overview' && <Overview user={user} />}
+          {tab === 'addresses' && <AddressesPanel />}
+          {tab === 'orders' && <OrdersPanel onLoyaltyChange={onUserRefresh} />}
+          {tab === 'favorites' && <FavoritesPanel />}
+          {tab === 'payments' && <PaymentsPanel />}
+          {tab === 'reviews' && <ReviewsPanel />}
+          {tab === 'loyalty' && <LoyaltyPanel />}
         </section>
       </main>
     </div>
@@ -607,45 +629,6 @@ function Card({ label, value, note }: { label: string; value: string; note: stri
       <p className="text-sm text-slate-500">{label}</p>
       <p className="mt-4 text-3xl font-black">{value}</p>
       <p className="mt-2 text-sm text-slate-400">{note}</p>
-    </div>
-  );
-}
-
-function Panel({ tab, setError }: { tab: string; setError: (value: string) => void }) {
-  const [data, setData] = useState<unknown>();
-
-  useEffect(() => {
-    let active = true;
-    const paths: Record<string, string> = {
-      addresses: '/addresses',
-      orders: '/orders',
-      favorites: '/favorites',
-      payments: '/payment-methods',
-      loyalty: '/loyalty',
-    };
-
-    setData(undefined);
-    api<unknown>(paths[tab] || '/loyalty')
-      .then((response) => {
-        if (active) setData(response);
-      })
-      .catch((requestError) => {
-        if (active) setError(requestError instanceof Error ? requestError.message : 'Unable to load this section.');
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [setError, tab]);
-
-  return (
-    <div className="rounded-2xl bg-white p-6 shadow-sm">
-      <h2 className="text-2xl font-black capitalize">{tab}</h2>
-      {!data ? (
-        <p className="mt-8 text-slate-500">Loading…</p>
-      ) : (
-        <pre className="mt-6 overflow-auto rounded-xl bg-slate-50 p-4 text-sm">{JSON.stringify(data, null, 2)}</pre>
-      )}
     </div>
   );
 }
