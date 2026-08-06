@@ -15,7 +15,21 @@ type Address = {
   is_default: boolean;
 };
 
-type Restaurant = { id: string; name: string; cuisine: string; city: string; isFavorite: boolean };
+type Restaurant = {
+  id: string; name: string; cuisine: string; city: string; isFavorite: boolean; logoUrl?: string | null; bannerUrl?: string | null;
+  status?: 'OPEN' | 'BUSY' | 'CLOSED'; deliveryRadiusKm?: number; minimumOrderCents?: number;
+};
+
+type PublicMenuOption = { id: string; name: string; priceCents: number };
+type PublicChoiceGroup = { id: string; name: string; minSelections: number; maxSelections: number; isRequired: boolean; options: PublicMenuOption[] };
+type PublicMenuItem = {
+  id: string; name: string; description?: string | null; imageUrl?: string | null; basePriceCents: number; currentPriceCents: number;
+  preparationTimeMinutes: number; discountType?: 'PERCENTAGE' | 'FIXED_AMOUNT' | null; discountValue?: number | null;
+  variations: PublicChoiceGroup[]; addOnGroups: PublicChoiceGroup[];
+};
+type PublicMenuCategory = { id: string; name: string; description?: string | null; items: PublicMenuItem[] };
+type RestaurantMenu = { restaurant: Restaurant; categories: PublicMenuCategory[] };
+type CartLine = { key: string; item: PublicMenuItem; quantity: number; variationOptionIds: string[]; addOnIds: string[] };
 
 type Order = {
   id: string;
@@ -390,6 +404,103 @@ export function FavoritesPanel() {
   );
 }
 
+/* ----------------------------- Restaurant menus ----------------------------- */
+
+function allItemOptions(item: PublicMenuItem) {
+  return [...item.variations, ...item.addOnGroups].flatMap((group) => group.options);
+}
+
+function cartLineUnitPrice(line: CartLine) {
+  const selected = new Set([...line.variationOptionIds, ...line.addOnIds]);
+  return line.item.currentPriceCents + allItemOptions(line.item).filter((option) => selected.has(option.id)).reduce((sum, option) => sum + option.priceCents, 0);
+}
+
+export function RestaurantMenuPanel() {
+  const [restaurants, setRestaurants] = useState<Restaurant[] | null>(null);
+  const [menu, setMenu] = useState<RestaurantMenu | null>(null);
+  const [menuLoading, setMenuLoading] = useState(false);
+  const [customizing, setCustomizing] = useState<PublicMenuItem | null>(null);
+  const [cart, setCart] = useState<CartLine[]>([]);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [placing, setPlacing] = useState(false);
+
+  useEffect(() => {
+    api<{ restaurants: Restaurant[] }>('/restaurants')
+      .then((response) => setRestaurants(response.restaurants))
+      .catch((requestError) => setError(errorMessage(requestError)));
+  }, []);
+
+  async function openRestaurant(restaurant: Restaurant) {
+    if (cart.length && menu?.restaurant.id !== restaurant.id && !window.confirm('Your cart belongs to another restaurant. Clear it and view this menu?')) return;
+    if (menu?.restaurant.id !== restaurant.id) setCart([]);
+    setError(''); setNotice(''); setMenuLoading(true);
+    try {
+      const response = await api<RestaurantMenu>(`/restaurants/${restaurant.id}/menu`);
+      setMenu(response);
+    } catch (requestError) { setError(errorMessage(requestError)); } finally { setMenuLoading(false); }
+  }
+
+  function addLine(line: Omit<CartLine, 'key'>) {
+    const key = `${line.item.id}:${[...line.variationOptionIds].sort().join(',')}:${[...line.addOnIds].sort().join(',')}`;
+    setCart((current) => {
+      const match = current.find((entry) => entry.key === key);
+      return match ? current.map((entry) => entry.key === key ? { ...entry, quantity: entry.quantity + line.quantity } : entry) : [...current, { ...line, key }];
+    });
+    setCustomizing(null);
+    setNotice(`${line.item.name} added to your cart.`);
+  }
+
+  async function checkout() {
+    if (!menu || cart.length === 0) return;
+    setError(''); setNotice(''); setPlacing(true);
+    try {
+      const { order } = await api<{ order: Order }>('/orders', {
+        method: 'POST',
+        body: JSON.stringify({ items: cart.map((line) => ({ menuItemId: line.item.id, quantity: line.quantity, variationOptionIds: line.variationOptionIds, addOnIds: line.addOnIds })) }),
+      });
+      setCart([]);
+      setNotice(`Order placed at ${menu.restaurant.name}. Order ${order.id.slice(0, 8).toUpperCase()} is pending confirmation.`);
+    } catch (requestError) { setError(errorMessage(requestError)); } finally { setPlacing(false); }
+  }
+
+  const cartTotal = cart.reduce((sum, line) => sum + cartLineUnitPrice(line) * line.quantity, 0);
+  return <PanelShell title={menu ? menu.restaurant.name : 'Browse restaurants'} subtitle={menu ? 'Choose items from the menu. Prices are calculated from the restaurant’s live catalogue.' : 'Choose a restaurant, browse its live menu, and add dishes to your cart.'}>
+    <InlineError message={error} />
+    {notice && <p className="mb-4 rounded-xl bg-emerald-50 p-3 text-sm font-semibold text-emerald-800">{notice}</p>}
+    {!menu ? (!restaurants ? <p className="text-slate-500">Loading restaurants…</p> : <div className="grid gap-4 md:grid-cols-2">{restaurants.map((restaurant) => <button key={restaurant.id} type="button" className="group overflow-hidden rounded-2xl border border-sage text-left transition hover:border-brand hover:shadow-sm" onClick={() => void openRestaurant(restaurant)}><div className="h-24 bg-gradient-to-br from-brand to-emerald-700">{restaurant.bannerUrl && <img src={restaurant.bannerUrl} alt="" className="h-full w-full object-cover" />}</div><div className="relative p-5"><div className="absolute -top-8 grid h-14 w-14 place-items-center overflow-hidden rounded-2xl border-4 border-white bg-sage font-black text-brand">{restaurant.logoUrl ? <img src={restaurant.logoUrl} alt="" className="h-full w-full object-cover" /> : restaurant.name.slice(0, 1)}</div><div className="ml-16"><p className="font-black group-hover:text-brand">{restaurant.name}</p><p className="mt-1 text-sm text-slate-500">{restaurant.cuisine} · {restaurant.city}</p></div><div className="mt-4 flex flex-wrap gap-2 text-xs font-bold"><span className={`rounded-full px-2.5 py-1 ${restaurant.status === 'OPEN' ? 'bg-emerald-100 text-emerald-800' : restaurant.status === 'BUSY' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>{restaurant.status === 'OPEN' ? 'Open' : restaurant.status === 'BUSY' ? 'Busy' : 'Closed'}</span>{restaurant.minimumOrderCents !== undefined && <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">Min. {formatMoney(restaurant.minimumOrderCents)}</span>}</div></div></button>)}</div>) : <div>
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><button type="button" className="text-sm font-bold text-brand hover:underline" onClick={() => { setMenu(null); setCart([]); setNotice(''); }}>← All restaurants</button><span className={`rounded-full px-3 py-1 text-xs font-bold ${menu.restaurant.status === 'OPEN' ? 'bg-emerald-100 text-emerald-800' : menu.restaurant.status === 'BUSY' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>{menu.restaurant.status === 'OPEN' ? 'Open for orders' : menu.restaurant.status === 'BUSY' ? 'Busy — longer wait' : 'Closed'}</span></div>
+      {menuLoading ? <p className="py-10 text-center text-slate-500">Loading menu…</p> : <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]"><div className="space-y-7">{menu.categories.length === 0 ? <EmptyState>This restaurant has not published menu items yet.</EmptyState> : menu.categories.map((category) => <section key={category.id}><div className="mb-3"><h3 className="text-xl font-black">{category.name}</h3>{category.description && <p className="text-sm text-slate-500">{category.description}</p>}</div><div className="grid gap-3 sm:grid-cols-2">{category.items.map((item) => <button key={item.id} type="button" className="flex gap-3 rounded-2xl border border-sage p-3 text-left transition hover:border-brand hover:shadow-sm" onClick={() => setCustomizing(item)}><div className="grid h-20 w-20 shrink-0 place-items-center overflow-hidden rounded-xl bg-sage font-black text-brand">{item.imageUrl ? <img src={item.imageUrl} alt="" className="h-full w-full object-cover" /> : item.name.slice(0, 1)}</div><div className="min-w-0 flex-1"><p className="font-bold">{item.name}</p><p className="mt-1 line-clamp-2 text-xs text-slate-500">{item.description || 'Made fresh to order.'}</p><div className="mt-2 flex items-center gap-2"><span className="font-black text-brand">{formatMoney(item.currentPriceCents)}</span>{item.currentPriceCents < item.basePriceCents && <span className="text-xs text-slate-400 line-through">{formatMoney(item.basePriceCents)}</span>}</div><p className="mt-1 text-xs font-semibold text-slate-400">{item.preparationTimeMinutes} min</p></div></button>)}</div></section>)}</div><CustomerCart cart={cart} restaurant={menu.restaurant} totalCents={cartTotal} placing={placing} onUpdate={(key, quantity) => setCart((current) => quantity === 0 ? current.filter((line) => line.key !== key) : current.map((line) => line.key === key ? { ...line, quantity } : line))} onCheckout={() => void checkout()} /></div>}
+    </div>}
+    {customizing && <MenuItemCustomizer item={customizing} onClose={() => setCustomizing(null)} onAdd={addLine} />}
+  </PanelShell>;
+}
+
+function CustomerCart({ cart, restaurant, totalCents, placing, onUpdate, onCheckout }: { cart: CartLine[]; restaurant: Restaurant; totalCents: number; placing: boolean; onUpdate: (key: string, quantity: number) => void; onCheckout: () => void }) {
+  const canOrder = restaurant.status === 'OPEN' || restaurant.status === 'BUSY';
+  const meetsMinimum = totalCents >= (restaurant.minimumOrderCents || 0);
+  return <aside className="h-fit rounded-2xl bg-ink p-5 text-white lg:sticky lg:top-5"><p className="text-xs font-bold uppercase tracking-[.16em] text-emerald-200">Your order</p><h3 className="mt-1 text-xl font-black">Cart</h3>{cart.length === 0 ? <p className="mt-5 text-sm text-slate-300">Add items from the menu to begin your order.</p> : <div className="mt-5 space-y-4">{cart.map((line) => <div key={line.key} className="border-b border-white/10 pb-4"><div className="flex gap-3"><div className="min-w-0 flex-1"><p className="font-bold">{line.item.name}</p><p className="mt-1 text-xs text-slate-300">{[...line.variationOptionIds, ...line.addOnIds].map((id) => allItemOptions(line.item).find((option) => option.id === id)?.name).filter(Boolean).join(', ') || 'Standard'}</p></div><p className="font-bold">{formatMoney(cartLineUnitPrice(line) * line.quantity)}</p></div><div className="mt-3 flex items-center gap-3"><button type="button" className="grid h-7 w-7 place-items-center rounded-full bg-white/10 font-bold hover:bg-white/20" onClick={() => onUpdate(line.key, line.quantity - 1)}>−</button><span className="w-4 text-center text-sm font-bold">{line.quantity}</span><button type="button" className="grid h-7 w-7 place-items-center rounded-full bg-white/10 font-bold hover:bg-white/20" onClick={() => onUpdate(line.key, line.quantity + 1)}>+</button></div></div>)}<div className="flex items-center justify-between pt-1 text-lg font-black"><span>Total</span><span>{formatMoney(totalCents)}</span></div><p className="text-xs text-slate-300">Calculated from the live menu. The server confirms all prices at checkout.</p>{!meetsMinimum && <p className="rounded-lg bg-amber-300/15 p-3 text-xs font-semibold text-amber-100">Add {formatMoney((restaurant.minimumOrderCents || 0) - totalCents)} to reach the minimum order.</p>}<button type="button" className="w-full rounded-xl bg-emerald-400 px-4 py-3 font-bold text-ink transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50" disabled={!canOrder || !meetsMinimum || placing} onClick={onCheckout}>{placing ? 'Placing order…' : !canOrder ? 'Restaurant is closed' : 'Place order'}</button></div>}</aside>;
+}
+
+function MenuItemCustomizer({ item, onClose, onAdd }: { item: PublicMenuItem; onClose: () => void; onAdd: (line: Omit<CartLine, 'key'>) => void }) {
+  const [variationOptionIds, setVariationOptionIds] = useState<string[]>([]);
+  const [addOnIds, setAddOnIds] = useState<string[]>([]);
+  const [quantity, setQuantity] = useState(1);
+  const [error, setError] = useState('');
+  const toggle = (id: string, selected: string[], setSelected: (ids: string[]) => void) => setSelected(selected.includes(id) ? selected.filter((value) => value !== id) : [...selected, id]);
+  const selectedPrice = [...variationOptionIds, ...addOnIds].map((id) => allItemOptions(item).find((option) => option.id === id)?.priceCents || 0).reduce((sum, value) => sum + value, item.currentPriceCents);
+  function add() {
+    const invalid = [...item.variations.map((group) => ({ group, ids: variationOptionIds })), ...item.addOnGroups.map((group) => ({ group, ids: addOnIds }))].find(({ group, ids }) => { const count = group.options.filter((option) => ids.includes(option.id)).length; return count < group.minSelections || count > group.maxSelections; });
+    if (invalid) { setError(`Please select between ${invalid.group.minSelections} and ${invalid.group.maxSelections} option(s) for ${invalid.group.name}.`); return; }
+    onAdd({ item, variationOptionIds, addOnIds, quantity });
+  }
+  return <div className="fixed inset-0 z-50 flex items-end bg-ink/40 sm:items-center sm:justify-center sm:p-5"><div className="max-h-[94vh] w-full max-w-xl overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl sm:rounded-3xl sm:p-7"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[.16em] text-brand">Customize your item</p><h2 className="mt-1 text-2xl font-black">{item.name}</h2><p className="mt-1 text-sm text-slate-500">Starting at {formatMoney(item.currentPriceCents)}</p></div><button type="button" className="text-2xl text-slate-500" onClick={onClose}>×</button></div><div className="mt-6 space-y-6">{item.variations.map((group) => <CustomerChoiceGroup key={group.id} group={group} selected={variationOptionIds} onToggle={(id) => toggle(id, variationOptionIds, setVariationOptionIds)} />)}{item.addOnGroups.map((group) => <CustomerChoiceGroup key={group.id} group={group} selected={addOnIds} onToggle={(id) => toggle(id, addOnIds, setAddOnIds)} />)}</div>{error && <p className="mt-5 rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}<div className="mt-7 flex items-center justify-between border-t border-slate-100 pt-5"><div className="flex items-center gap-3"><button type="button" className="grid h-9 w-9 place-items-center rounded-full bg-slate-100 font-bold" onClick={() => setQuantity(Math.max(1, quantity - 1))}>−</button><span className="font-bold">{quantity}</span><button type="button" className="grid h-9 w-9 place-items-center rounded-full bg-slate-100 font-bold" onClick={() => setQuantity(quantity + 1)}>+</button></div><button type="button" className="rounded-xl bg-brand px-5 py-3 font-bold text-white hover:bg-emerald-800" onClick={add}>Add · {formatMoney(selectedPrice * quantity)}</button></div></div></div>;
+}
+
+function CustomerChoiceGroup({ group, selected, onToggle }: { group: PublicChoiceGroup; selected: string[]; onToggle: (id: string) => void }) {
+  return <section><div className="flex justify-between gap-3"><h3 className="font-black">{group.name}</h3><span className="text-xs font-bold text-slate-400">{group.minSelections > 0 ? `Required · choose ${group.minSelections}${group.maxSelections !== group.minSelections ? `–${group.maxSelections}` : ''}` : `Choose up to ${group.maxSelections}`}</span></div><div className="mt-2 space-y-2">{group.options.map((option) => <label key={option.id} className="flex cursor-pointer items-center gap-3 rounded-xl border border-slate-200 p-3 hover:border-brand"><input type="checkbox" checked={selected.includes(option.id)} onChange={() => onToggle(option.id)} /><span className="flex-1 text-sm font-semibold">{option.name}</span><span className="text-sm font-bold text-brand">{option.priceCents ? `+${formatMoney(option.priceCents)}` : 'Included'}</span></label>)}</div></section>;
+}
+
 /* ----------------------------------- Orders ------------------------------------ */
 
 const statusStyles: Record<string, string> = {
@@ -402,92 +513,24 @@ const statusStyles: Record<string, string> = {
   CANCELLED: 'bg-red-100 text-red-800',
 };
 
-export function OrdersPanel({ onLoyaltyChange }: { onLoyaltyChange?: () => void }) {
+export function OrdersPanel() {
   const [orders, setOrders] = useState<Order[] | null>(null);
-  const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
   const [error, setError] = useState('');
-  const [demo, setDemo] = useState({ restaurantId: '', amount: '25.00' });
-  const [placing, setPlacing] = useState(false);
   const [reviewing, setReviewing] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([api<{ orders: Order[] }>('/orders'), api<{ restaurants: Restaurant[] }>('/restaurants')])
-      .then(([ordersResponse, restaurantsResponse]) => {
-        setOrders(ordersResponse.orders);
-        setRestaurants(restaurantsResponse.restaurants);
-        setDemo((current) =>
-          current.restaurantId ? current : { ...current, restaurantId: restaurantsResponse.restaurants[0]?.id || '' },
-        );
-      })
+    api<{ orders: Order[] }>('/orders')
+      .then((response) => setOrders(response.orders))
       .catch((requestError) => setError(errorMessage(requestError)));
   }, []);
-
-  async function placeOrder(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setError('');
-    const totalCents = Math.round(Number(demo.amount) * 100);
-    if (!Number.isFinite(totalCents) || totalCents < 100) {
-      setError('Enter an amount of at least RM 1.00.');
-      return;
-    }
-    setPlacing(true);
-    try {
-      const { order } = await api<{ order: Order }>('/orders', {
-        method: 'POST',
-        body: JSON.stringify({ restaurantId: demo.restaurantId, totalCents }),
-      });
-      const restaurantName = restaurants.find((item) => item.id === demo.restaurantId)?.name || null;
-      setOrders((current) => [{ ...order, restaurantName, reviewed: false }, ...(current || [])]);
-      onLoyaltyChange?.();
-    } catch (requestError) {
-      setError(errorMessage(requestError));
-    } finally {
-      setPlacing(false);
-    }
-  }
 
   return (
     <PanelShell title="Order history" subtitle="Every order you place appears here, newest first.">
       <InlineError message={error} />
-      <form onSubmit={placeOrder} className="mb-6 rounded-2xl bg-cream p-5">
-        <p className="mb-3 font-bold">Place a demo order</p>
-        <div className="flex flex-wrap items-center gap-3">
-          <select
-            className="field mb-0 w-auto flex-1"
-            required
-            value={demo.restaurantId}
-            onChange={(event) => setDemo({ ...demo, restaurantId: event.target.value })}
-          >
-            {restaurants.map((restaurant) => (
-              <option key={restaurant.id} value={restaurant.id}>
-                {restaurant.name}
-              </option>
-            ))}
-          </select>
-          <input
-            className="field mb-0 w-28"
-            type="number"
-            min="1"
-            step="0.01"
-            required
-            value={demo.amount}
-            onChange={(event) => setDemo({ ...demo, amount: event.target.value })}
-          />
-          <button
-            className="rounded-xl bg-brand px-5 py-2.5 font-bold text-white transition hover:bg-emerald-800 disabled:opacity-60"
-            disabled={placing || !demo.restaurantId}
-          >
-            {placing ? 'Placing…' : 'Order'}
-          </button>
-        </div>
-        <p className="mt-2 text-xs text-slate-500">
-          Demo orders are delivered instantly and earn 1 loyalty point per RM 1.
-        </p>
-      </form>
       {!orders ? (
         <p className="text-slate-500">Loading…</p>
       ) : orders.length === 0 ? (
-        <EmptyState>No orders yet. Place your first order above.</EmptyState>
+        <EmptyState>No orders yet. Browse restaurants to order from a live menu.</EmptyState>
       ) : (
         <div className="grid gap-4">
           {orders.map((order) => (
